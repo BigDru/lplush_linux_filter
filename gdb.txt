@@ -1,3 +1,0 @@
-+set exec-wrapper ./gdb_wrapper.sh
-+break main
-Breakpoint 1 at 0x4553: file filter.cpp, line 17.

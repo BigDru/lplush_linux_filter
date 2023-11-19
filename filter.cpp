@@ -24,6 +24,8 @@ static const char * SCHEDULER_INFO = "ERROR";
 static const char * SCHEDULER_PAGE = "PAGE";
 static const char * SCHEDULER_ATTR = "ATTR";
 
+static FILE * line_log = nullptr;
+
 void
 cancel_job()
 {
@@ -48,6 +50,27 @@ void
 log(std::string s)
 {
     std::cerr << "DRU FILTER: " << s << std::endl;
+    std::fflush(stderr);
+}
+
+void
+log_char(char c)
+{
+    if (line_log)
+    {
+        fwrite(&c, 1, 1, line_log);
+    }
+}
+
+void
+log_raw_char(unsigned char c)
+{
+    if (line_log)
+    {
+        char hex[5];
+        snprintf(hex, 5, "0x%02X", c);
+        fwrite(hex, 4, 1, line_log);
+    }
 }
 
 void
@@ -64,7 +87,7 @@ Setup(ppd_file_t * ppd_file)
     }
 
     // Custom Setup
-    if (model_number == 32)
+    if (model_number == 0x20)
     {
         putchar(0x1B);
         putchar(0x45);
@@ -86,6 +109,7 @@ StartPage(
     ppd_file_t * ppd_file,
     cups_page_header2_t * header)
 {
+    log("Inside StartPage");
     switch (global_model_number)
     {
         case 0x10:
@@ -186,6 +210,7 @@ StartPage(
                     ((header->cupsWidth + 7) >> 3),
                     ((header->cupsHeight + 7) >> 3));
 
+            log("Getting adjusts");
             ppd_choice_t * choice_adjust_horizontal = ppdFindMarkedChoice(ppd_file,"AdjustHoriaontal");
             if (choice_adjust_horizontal)
             {
@@ -201,6 +226,7 @@ StartPage(
                     adjust_horizontal,
                     adjust_vertical);
 
+            log("rotation");
             int rotate = 0;
             ppd_choice_t * choice_rotate = ppdFindMarkedChoice(ppd_file,"Rotate");
             if (choice_rotate)
@@ -226,6 +252,7 @@ StartPage(
                 }
             }
 
+            log("print rate");
             ppd_choice_t * choice_ze_print_rate = ppdFindMarkedChoice(ppd_file,"zePrintRate");
             if (choice_ze_print_rate)
             {
@@ -242,7 +269,7 @@ StartPage(
             }
             else
             {
-              puts("SETC AUTODOTTED ON");
+                puts("SETC AUTODOTTED ON");
             }
             puts("SETC PAUSEKEY ON");
             puts("SETC WATERMARK OFF");
@@ -250,6 +277,8 @@ StartPage(
             printf("BITMAP 0,0,%u,%u,1,",
                     (header->cupsWidth + 7) >> 3,
                     header->cupsHeight);
+
+            log("mallocing");
             global_buffer = malloc((ulong) header->cupsBytesPerLine);
             global_feed = 0;
         } break;
@@ -271,7 +300,6 @@ StartPage(
                 {
                     printf("\x1b""&l90A");
                 } break;
-
                 case 0x289:
                 {
                     printf("\x1b""&l91A");
@@ -747,11 +775,12 @@ PCLCompress(
                     }
 
                     control_byte = offset;
+                    run_start_position = current_position;
                 }
             }
 
             *compress_buffer_current_position++ = control_byte;
-            memcpy(compress_buffer_current_position, current_position, bytes_for_this_run);
+            memcpy(compress_buffer_current_position, run_start_position, bytes_for_this_run);
 
             current_position = next_position;
             compress_buffer_current_position += bytes_for_this_run;
@@ -901,37 +930,76 @@ OutputLine(
 
         case 0x14:
         {
+            log("Output line");
+
+            unsigned long bytes_per_line = (header->cupsWidth + 7) / 8;
+            if (bytes_per_line > 0)
+            {
+                char *current_position = (char *)global_buffer;
+
+                for (unsigned long byte = 0; byte < bytes_per_line; byte++)
+                {
+                    unsigned char c = 0;
+                    for (int bit_index = 0; bit_index < 8; bit_index++)
+                    {
+                        int pixel_index = byte * 8 + bit_index;
+
+                        if (pixel_index < header->cupsWidth)
+                        {
+                            unsigned char value = current_position[pixel_index];
+                            if (value <= (unsigned char) 0x80)
+                            {
+                                c |= (1 << (7 - bit_index));
+                                //log_char('1');
+                            }
+                            else
+                            {
+                                //log_char('0');
+                            }
+                            //log_raw_char(value);
+                        }
+                    }
+                    //log_raw_char(c);
+                    putchar(~c);
+                }
+            }
+
+            fflush(stdout);  // Ensure all output is written
+            log_char('\n');
+
+            /*
             if (((header->cupsWidth + 7) >> 3) != 0)
             {
-                char * c_p = (char *) global_buffer;
-                int count = 0;
+                char * current_position = (char *) global_buffer;
+                int total_bits = 0;
                 unsigned long w = 0;
                 while (1)
                 {
-                    int count2 = 0;
+                    int current_bit_in_next_byte = 0;
                     char c = 0;
                     do
                     {
-                        if (count + count2 < header->cupsWidth)
+                        if (total_bits + current_bit_in_next_byte < header->cupsWidth)
                         {
-                            char t = ((char) 0x80 >> ((char) count2 & 0x1f));
-                            if ((char) 0x80 < c_p[count2])
+                            char t = ((char) 0x80 >> ((char) current_bit_in_next_byte & 0x1f));
+                            if ((char) 0x80 < current_position[current_bit_in_next_byte])
                             {
                                 t = 0;
                             }
                             c = c | t;
                         }
-                        count2++;
-                    } while (count2 != 8);
+                        current_bit_in_next_byte++;
+                    } while (current_bit_in_next_byte != 8);
                     putchar(~c);
                     w++;
 
                     if (w == (header->cupsWidth + 7) >> 3) break;
-                    c_p += 8;
-                    count += 8;
+                    current_position += 8;
+                    total_bits += 8;
                 }
             }
             fflush(stdout);
+            */
         } break;
 
         case 0x20:
@@ -1012,7 +1080,16 @@ main(int argc, char * argv[])
         }
     }
 
+    line_log = fopen("/tmp/line.log", "wb");
+    if (line_log == nullptr)
+    {
+        log("Error opening log file");
+        perror("error");
+        return 1;
+    }
+
     cups_raster_t * raster_file = cupsRasterOpen(raster_file_descriptor, CUPS_RASTER_READ);
+    log(std::format("Raster file: {}", (uint64_t) raster_file));
     global_is_cancelled = 0;
 
     sigset(SIGTERM, signal_handler);
@@ -1033,18 +1110,22 @@ main(int argc, char * argv[])
 
     Setup(ppd_file);
     log("Setup complete");
+    log(std::format("model: {}", global_model_number));
     global_page = 0;
 
     cups_page_header2_t * header;
 
     do {
         // Check if cancelled after reading header
+        log("RasterRead");
         if (!cupsRasterReadHeader2(raster_file, header) || global_is_cancelled) break;
+        log("RasterRead done");
 
         global_page++;
         message_scheduler(SCHEDULER_PAGE, std::format("{} 1", global_page));
         message_scheduler(SCHEDULER_INFO, std::format("Starting page {}", global_page));
 
+        log("calling StartPage");
         StartPage(ppd_file, header);
         log("StartPage complete");
 
@@ -1057,7 +1138,6 @@ main(int argc, char * argv[])
         uint update_counter = 0;
         while (true)
         {
-            log("Entering loop");
             // Update status every 16 loops
             if ((update_counter & 0xF) == 0)
             {
@@ -1067,12 +1147,9 @@ main(int argc, char * argv[])
                 update_counter = 0;
             }
 
-            log("Rastering pixels");
             if (!cupsRasterReadPixels(raster_file, (unsigned char *)global_buffer, header->cupsBytesPerLine)) break;
 
-            log("OutputLine called");
             OutputLine(raster_file, header, update_counter);
-            log("OutputLine complete");
             update_counter++;
 
             if (update_counter >= header->cupsHeight) break;
@@ -1084,6 +1161,7 @@ main(int argc, char * argv[])
         message_scheduler(SCHEDULER_INFO, std::format("Finished page {}", global_page));
     } while (!global_is_cancelled);
 
+    log("wrapping up");
     cupsRasterClose(raster_file);
     if (raster_file_descriptor) close(raster_file_descriptor);
     raster_file = nullptr;

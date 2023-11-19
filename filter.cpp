@@ -24,8 +24,6 @@ static const char * SCHEDULER_INFO = "ERROR";
 static const char * SCHEDULER_PAGE = "PAGE";
 static const char * SCHEDULER_ATTR = "ATTR";
 
-static FILE * line_log = nullptr;
-
 void
 cancel_job()
 {
@@ -51,26 +49,6 @@ log(std::string s)
 {
     std::cerr << "DRU FILTER: " << s << std::endl;
     std::fflush(stderr);
-}
-
-void
-log_char(char c)
-{
-    if (line_log)
-    {
-        fwrite(&c, 1, 1, line_log);
-    }
-}
-
-void
-log_raw_char(unsigned char c)
-{
-    if (line_log)
-    {
-        char hex[5];
-        snprintf(hex, 5, "0x%02X", c);
-        fwrite(hex, 4, 1, line_log);
-    }
 }
 
 void
@@ -930,8 +908,6 @@ OutputLine(
 
         case 0x14:
         {
-            log("Output line");
-
             unsigned long bytes_per_line = (header->cupsWidth + 7) / 8;
             if (bytes_per_line > 0)
             {
@@ -950,56 +926,14 @@ OutputLine(
                             if (value <= (unsigned char) 0x80)
                             {
                                 c |= (1 << (7 - bit_index));
-                                //log_char('1');
                             }
-                            else
-                            {
-                                //log_char('0');
-                            }
-                            //log_raw_char(value);
                         }
                     }
-                    //log_raw_char(c);
                     putchar(~c);
                 }
             }
 
-            fflush(stdout);  // Ensure all output is written
-            log_char('\n');
-
-            /*
-            if (((header->cupsWidth + 7) >> 3) != 0)
-            {
-                char * current_position = (char *) global_buffer;
-                int total_bits = 0;
-                unsigned long w = 0;
-                while (1)
-                {
-                    int current_bit_in_next_byte = 0;
-                    char c = 0;
-                    do
-                    {
-                        if (total_bits + current_bit_in_next_byte < header->cupsWidth)
-                        {
-                            char t = ((char) 0x80 >> ((char) current_bit_in_next_byte & 0x1f));
-                            if ((char) 0x80 < current_position[current_bit_in_next_byte])
-                            {
-                                t = 0;
-                            }
-                            c = c | t;
-                        }
-                        current_bit_in_next_byte++;
-                    } while (current_bit_in_next_byte != 8);
-                    putchar(~c);
-                    w++;
-
-                    if (w == (header->cupsWidth + 7) >> 3) break;
-                    current_position += 8;
-                    total_bits += 8;
-                }
-            }
             fflush(stdout);
-            */
         } break;
 
         case 0x20:
@@ -1078,14 +1012,6 @@ main(int argc, char * argv[])
             message_scheduler(SCHEDULER_ERROR, "Unable to open raster file");
             return 1;
         }
-    }
-
-    line_log = fopen("/tmp/line.log", "wb");
-    if (line_log == nullptr)
-    {
-        log("Error opening log file");
-        perror("error");
-        return 1;
     }
 
     cups_raster_t * raster_file = cupsRasterOpen(raster_file_descriptor, CUPS_RASTER_READ);

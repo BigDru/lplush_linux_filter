@@ -987,12 +987,24 @@ OutputLine(
     }
 }
 
+#include <unistd.h>
+#include <pwd.h>
 int
 main(int argc, char * argv[])
 {
     // turn off stderr buffering
     setvbuf(stderr, nullptr, _IONBF, 0);
     int raster_file_descriptor = 0;
+
+    uid_t uid = getuid();
+    struct passwd * pw = getpwuid(uid);
+    log(std::format("User: {}", pw->pw_name));
+    log(std::format("argc: {}", argc));
+
+    for (int i = 0; i < argc; i++)
+    {
+        log(std::format("argv[{}]: {}", i, argv[i]));
+    }
 
     // validate input
     if (argc != 6 && argc != 7)
@@ -1005,7 +1017,10 @@ main(int argc, char * argv[])
     // First run
     if (argc == 7)
     {
+        log("Opening raster file");
         raster_file_descriptor = open(argv[6], O_RDONLY);
+        log(std::format("Raster file descriptor: {}", (uint64_t) raster_file_descriptor));
+
         if (raster_file_descriptor == -1)
         {
             log("Unable to open raster file");
@@ -1016,6 +1031,14 @@ main(int argc, char * argv[])
 
     cups_raster_t * raster_file = cupsRasterOpen(raster_file_descriptor, CUPS_RASTER_READ);
     log(std::format("Raster file: {}", (uint64_t) raster_file));
+    if (!raster_file)
+    {
+        log("Raster File Open failed");
+        message_scheduler(SCHEDULER_ERROR, "Raster File Open Failed");
+        // Skipping DEBUG log for what the error was
+        return 1;
+    }
+
     global_is_cancelled = 0;
 
     sigset(SIGTERM, signal_handler);
@@ -1039,12 +1062,12 @@ main(int argc, char * argv[])
     log(std::format("model: {}", global_model_number));
     global_page = 0;
 
-    cups_page_header2_t * header;
+    cups_page_header2_t header = {};
 
     do {
         // Check if cancelled after reading header
         log("RasterRead");
-        if (!cupsRasterReadHeader2(raster_file, header) || global_is_cancelled) break;
+        if (!cupsRasterReadHeader2(raster_file, &header) || global_is_cancelled) break;
         log("RasterRead done");
 
         global_page++;
@@ -1052,13 +1075,13 @@ main(int argc, char * argv[])
         message_scheduler(SCHEDULER_INFO, std::format("Starting page {}", global_page));
 
         log("calling StartPage");
-        StartPage(ppd_file, header);
+        StartPage(ppd_file, &header);
         log("StartPage complete");
 
         // One last check before printing (after start page)
         if (global_is_cancelled) break;
 
-        if (!header->cupsHeight || !header->cupsBytesPerLine) continue;
+        if (!header.cupsHeight || !header.cupsBytesPerLine) continue;
 
         uint line_count = 0;
         uint update_counter = 0;
@@ -1067,22 +1090,22 @@ main(int argc, char * argv[])
             // Update status every 16 loops
             if ((update_counter & 0xF) == 0)
             {
-                ulong progress = line_count / (float) header->cupsHeight;
+                ulong progress = line_count / (float) header.cupsHeight;
                 message_scheduler(SCHEDULER_INFO, std::format("Printing page {}, {}% complete.", global_page, progress));
                 message_scheduler(SCHEDULER_ATTR, std::format("job-media-progress={}", progress));
                 update_counter = 0;
             }
 
-            if (!cupsRasterReadPixels(raster_file, (unsigned char *)global_buffer, header->cupsBytesPerLine)) break;
+            if (!cupsRasterReadPixels(raster_file, (unsigned char *)global_buffer, header.cupsBytesPerLine)) break;
 
-            OutputLine(raster_file, header, update_counter);
+            OutputLine(raster_file, &header, update_counter);
             update_counter++;
 
-            if (update_counter >= header->cupsHeight) break;
+            if (update_counter >= header.cupsHeight) break;
             line_count += 100;
         }
 
-        EndPage(ppd_file, header);
+        EndPage(ppd_file, &header);
         log("EndPage complete");
         message_scheduler(SCHEDULER_INFO, std::format("Finished page {}", global_page));
     } while (!global_is_cancelled);

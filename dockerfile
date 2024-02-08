@@ -7,7 +7,14 @@ RUN apt-get update && \
     apt-get upgrade -y
 
 # Install libcups2-dev and other tools
-RUN apt-get install -y libcups2-dev
+RUN apt-get install -y \
+    libcups2-dev \
+    libgnutls28-dev \
+    libavahi-client-dev \
+    libavahi-common-dev \
+    libunistring-dev \
+    libsystemd-dev \
+    vim
 
 # Clean up the apt cache to reduce image size
 RUN rm -rf /var/lib/apt/lists/*
